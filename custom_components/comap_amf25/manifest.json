@@ -3,9 +3,9 @@
   "name": "ComAp AMF 25 Genset Controller",
   "codeowners": [],
   "config_flow": true,
-  "documentation": "https://github.com/YOUR_GITHUB_USERNAME/comap_amf25",
+  "documentation": "https://github.com/pfassberg/ha-comp-comap_amf25",
   "integration_type": "hub",
   "iot_class": "local_polling",
   "requirements": [],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

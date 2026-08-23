@@ -1,17 +1,57 @@
 """The ComAp AMF 25 genset controller integration."""
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, HomeAssistant
 
 from .const import DOMAIN
 from .coordinator import ComapAmf25Coordinator, ComapAmf25SetpointsCoordinator
 
+_LOGGER = logging.getLogger(__name__)
+
 PLATFORMS = ["sensor", "binary_sensor", "select", "button"]
+
+# How long to wait before the very first login attempt, but only when
+# Home Assistant is still in its own startup phase (hass.state ==
+# CoreState.starting) - not on a later manual reload of this entry.
+#
+# This integration has repeatedly failed its first login attempt right
+# at cold boot with a garbled response from the panel, self-resolving
+# after a few of Home Assistant's own automatic retries. Several
+# distinct, confirmed code-level bugs on our side have already been
+# found and fixed this way (a cookie-jar issue, a race between two
+# coordinators, connection pooling against a session shared with every
+# other integration, and a leaked session on failed setup) - but the
+# exact same failure still happens on a clean first attempt after all
+# of those fixes. That points to something outside this integration's
+# code entirely: most likely the host's own network stack not yet
+# being fully routable to the local LAN in the first few seconds after
+# boot, which a short, startup-only delay is a reasonable mitigation
+# for even without a fully confirmed root cause.
+_STARTUP_GRACE_PERIOD_SECONDS = 15
+# hass.state stays CoreState.starting across Home Assistant's own
+# automatic retries too, not just the very first attempt - this flag
+# keeps the delay to once per boot rather than stacking it onto every
+# retry within the startup window.
+_STARTUP_DELAY_APPLIED_KEY = f"{DOMAIN}_startup_delay_applied"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up ComAp AMF 25 from a config entry."""
+    if hass.state == CoreState.starting and not hass.data.get(
+        _STARTUP_DELAY_APPLIED_KEY
+    ):
+        hass.data[_STARTUP_DELAY_APPLIED_KEY] = True
+        _LOGGER.debug(
+            "Home Assistant is still starting - waiting %s seconds before the "
+            "first login attempt to let the network stack settle",
+            _STARTUP_GRACE_PERIOD_SECONDS,
+        )
+        await asyncio.sleep(_STARTUP_GRACE_PERIOD_SECONDS)
+
     coordinator = ComapAmf25Coordinator(hass, entry)
     try:
         await coordinator.async_config_entry_first_refresh()
