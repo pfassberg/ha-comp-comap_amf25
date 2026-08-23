@@ -21,6 +21,22 @@ from .coordinator import ComapAmf25Coordinator, ComapAmf25SetpointsCoordinator
 from .entity import device_info as _device_info
 
 
+def _build_entity_name(prefix: str, name: str) -> str:
+    """Combine a group prefix with a panel field name, without
+    duplicating a word the field name already starts with.
+
+    The Mains group's own field names already read "Mains V L1-N",
+    "Mains Freq" etc., so prefixing "Mains " again produced entities
+    named "Mains Mains V L1-N". This only skips the prefix on an exact
+    (case-insensitive) word match, so it doesn't accidentally affect
+    abbreviated cases like Generator's "Gen kW" (kept as "Generator Gen
+    kW" - "Gen" isn't the same word as "Generator").
+    """
+    if name.lower().startswith(prefix.lower()):
+        return name
+    return f"{prefix} {name}"
+
+
 def _infer_precision(raw_value: str | None, scale: float = 1.0) -> int | None:
     """Derive a display precision matching the panel's own formatting.
 
@@ -37,6 +53,12 @@ def _infer_precision(raw_value: str | None, scale: float = 1.0) -> int | None:
     45.2 * 1000 = 45200.0 has none worth showing, so the raw count is
     shifted down by the power of ten in `scale`.
 
+    Computed once at entity creation, not on every update - fields
+    where a single first-seen sample isn't reliable (e.g. the panel
+    sometimes omits the decimal point for a round-number reading, like
+    "403" instead of "403.2") should go in _PRECISION_OVERRIDES below
+    instead of relying on this.
+
     Returns None (no opinion) for anything that isn't a plain number.
     """
     if raw_value is None:
@@ -50,6 +72,28 @@ def _infer_precision(raw_value: str | None, scale: float = 1.0) -> int | None:
     if scale != 1.0:
         precision = max(0, precision - round(math.log10(scale)))
     return precision
+
+
+# Explicit precision overrides, keyed by the panel's own field name.
+# Wins over _infer_precision's single-sample guess - use this for any
+# field where that guess turns out wrong (e.g. it happened to catch a
+# round-number reading at startup). Extend as needed.
+_PRECISION_OVERRIDES: dict[str, int] = {
+    "Mains V L1-N": 1,
+    "Mains V L2-N": 1,
+    "Mains V L3-N": 1,
+    "Mains V L1-L2": 1,
+    "Mains V L2-L3": 1,
+    "Mains V L3-L1": 1,
+}
+
+
+def _get_precision(name: str, raw_value: str | None, scale: float = 1.0) -> int | None:
+    """Look up an explicit override for `name`, else fall back to
+    inferring from `raw_value`."""
+    if name in _PRECISION_OVERRIDES:
+        return _PRECISION_OVERRIDES[name]
+    return _infer_precision(raw_value, scale)
 
 
 # Display prefix for each Setpoints group slug (see coordinator.py's
@@ -119,7 +163,15 @@ async def async_setup_entry(
             ComapAmf25GeneratorValueSensor(coordinator, entry, device_info, name)
         )
 
+    # Exact duplicates of Control page sensors with identical names
+    # (present since the original version of this integration) - after
+    # the "Mains Mains" naming fix, both copies would display under the
+    # identical name, which is confusing rather than useful. Kept the
+    # Control page's originals rather than these newer copies.
+    _mains_duplicates = {"Mains Freq", "Mains V L1-N", "Mains V L2-N", "Mains V L3-N"}
     for name in coordinator.data.mains_values:
+        if name in _mains_duplicates:
+            continue
         entities.append(
             ComapAmf25MainsValueSensor(coordinator, entry, device_info, name)
         )
@@ -212,7 +264,7 @@ class ComapAmf25ValueSensor(_ComapAmf25BaseSensor):
             self._attr_native_unit_of_measurement = unit
 
         raw = coordinator.data.values.get(name, {}).get("value")
-        self._attr_suggested_display_precision = _infer_precision(raw, self._scale)
+        self._attr_suggested_display_precision = _get_precision(name, raw, self._scale)
 
     @property
     def native_value(self) -> str | float | None:
@@ -254,7 +306,9 @@ class ComapAmf25GaugeSensor(_ComapAmf25BaseSensor):
             if unit:
                 self._attr_native_unit_of_measurement = unit
 
-        self._attr_suggested_display_precision = _infer_precision(gauge["value"])
+        self._attr_suggested_display_precision = _get_precision(
+            gauge["name"], gauge["value"]
+        )
 
     @property
     def native_value(self) -> float | None:
@@ -311,8 +365,8 @@ class ComapAmf25TimerSensor(_ComapAmf25BaseSensor):
 
     def __init__(self, coordinator, entry, device_info) -> None:
         super().__init__(coordinator, entry, device_info, "timer")
-        self._attr_suggested_display_precision = _infer_precision(
-            coordinator.data.timer_value
+        self._attr_suggested_display_precision = _get_precision(
+            "Timer", coordinator.data.timer_value
         )
 
     @property
@@ -366,7 +420,7 @@ class ComapAmf25EngineValueSensor(_ComapAmf25BaseSensor):
             coordinator, entry, device_info, f"engine_{name.lower().replace(' ', '_')}"
         )
         self._name = name
-        self._attr_name = f"Engine {name}"
+        self._attr_name = _build_entity_name("Engine", name)
         self._scale = 1.0
 
         unit = coordinator.data.engine_values.get(name, {}).get("unit", "")
@@ -381,7 +435,7 @@ class ComapAmf25EngineValueSensor(_ComapAmf25BaseSensor):
             self._attr_native_unit_of_measurement = unit
 
         raw = coordinator.data.engine_values.get(name, {}).get("value")
-        self._attr_suggested_display_precision = _infer_precision(raw, self._scale)
+        self._attr_suggested_display_precision = _get_precision(name, raw, self._scale)
 
     @property
     def native_value(self) -> str | float | None:
@@ -423,7 +477,7 @@ class ComapAmf25GeneratorValueSensor(_ComapAmf25BaseSensor):
             f"generator_{name.lower().replace(' ', '_')}",
         )
         self._name = name
-        self._attr_name = f"Generator {name}"
+        self._attr_name = _build_entity_name("Generator", name)
         self._scale = 1.0
 
         unit = coordinator.data.generator_values.get(name, {}).get("unit", "")
@@ -437,7 +491,7 @@ class ComapAmf25GeneratorValueSensor(_ComapAmf25BaseSensor):
             self._attr_native_unit_of_measurement = unit
 
         raw = coordinator.data.generator_values.get(name, {}).get("value")
-        self._attr_suggested_display_precision = _infer_precision(raw, self._scale)
+        self._attr_suggested_display_precision = _get_precision(name, raw, self._scale)
 
     @property
     def native_value(self) -> str | float | None:
@@ -458,10 +512,12 @@ class ComapAmf25GeneratorValueSensor(_ComapAmf25BaseSensor):
 class ComapAmf25MainsValueSensor(_ComapAmf25BaseSensor):
     """A single labelled value from the Mains Measurement group page.
 
-    Adds the line-to-line voltages (L1-L2, L2-L3, L3-L1) that aren't
-    available anywhere else - Mains Freq and the L*-N voltages already
-    overlap with the Scada page and are kept for the same reason as the
-    other groups' overlap.
+    Only the line-to-line voltages (L1-L2, L2-L3, L3-L1) end up as
+    entities here - they aren't available anywhere else. Mains Freq
+    and the L*-N voltages are skipped entirely (see the setup loop in
+    async_setup_entry) since they're exact name collisions with the
+    Control page's own sensors of the same name, not just a semantic
+    overlap like the other groups have.
     """
 
     def __init__(
@@ -475,7 +531,7 @@ class ComapAmf25MainsValueSensor(_ComapAmf25BaseSensor):
             coordinator, entry, device_info, f"mains_{name.lower().replace(' ', '_')}"
         )
         self._name = name
-        self._attr_name = f"Mains {name}"
+        self._attr_name = _build_entity_name("Mains", name)
         self._scale = 1.0
 
         unit = coordinator.data.mains_values.get(name, {}).get("unit", "")
@@ -489,7 +545,7 @@ class ComapAmf25MainsValueSensor(_ComapAmf25BaseSensor):
             self._attr_native_unit_of_measurement = unit
 
         raw = coordinator.data.mains_values.get(name, {}).get("value")
-        self._attr_suggested_display_precision = _infer_precision(raw, self._scale)
+        self._attr_suggested_display_precision = _get_precision(name, raw, self._scale)
 
     @property
     def native_value(self) -> str | float | None:
@@ -530,7 +586,7 @@ class ComapAmf25ControllerIOValueSensor(_ComapAmf25BaseSensor):
             f"controller_io_{name.lower().replace(' ', '_')}",
         )
         self._name = name
-        self._attr_name = f"Controller I/O {name}"
+        self._attr_name = _build_entity_name("Controller I/O", name)
         self._scale = 1.0
 
         unit = coordinator.data.controller_io_values.get(name, {}).get("unit", "")
@@ -545,7 +601,7 @@ class ComapAmf25ControllerIOValueSensor(_ComapAmf25BaseSensor):
             self._attr_native_unit_of_measurement = unit
 
         raw = coordinator.data.controller_io_values.get(name, {}).get("value")
-        self._attr_suggested_display_precision = _infer_precision(raw, self._scale)
+        self._attr_suggested_display_precision = _get_precision(name, raw, self._scale)
 
     @property
     def native_value(self) -> str | float | None:
@@ -586,7 +642,7 @@ class ComapAmf25ExtensionIOValueSensor(_ComapAmf25BaseSensor):
             f"extension_io_{name.lower().replace(' ', '_')}",
         )
         self._name = name
-        self._attr_name = f"Extension I/O {name}"
+        self._attr_name = _build_entity_name("Extension I/O", name)
         self._scale = 1.0
 
         unit = coordinator.data.extension_io_values.get(name, {}).get("unit", "")
@@ -600,7 +656,7 @@ class ComapAmf25ExtensionIOValueSensor(_ComapAmf25BaseSensor):
             self._attr_native_unit_of_measurement = unit
 
         raw = coordinator.data.extension_io_values.get(name, {}).get("value")
-        self._attr_suggested_display_precision = _infer_precision(raw, self._scale)
+        self._attr_suggested_display_precision = _get_precision(name, raw, self._scale)
 
     @property
     def native_value(self) -> str | float | None:
@@ -650,7 +706,7 @@ class ComapAmf25StatisticsValueSensor(_ComapAmf25BaseSensor):
             f"statistics_{name.lower().replace(' ', '_')}",
         )
         self._name = name
-        self._attr_name = f"Statistics {name}"
+        self._attr_name = _build_entity_name("Statistics", name)
         self._scale = 1.0
 
         unit = coordinator.data.statistics_values.get(name, {}).get("unit", "")
@@ -673,7 +729,7 @@ class ComapAmf25StatisticsValueSensor(_ComapAmf25BaseSensor):
             self._attr_native_unit_of_measurement = unit
 
         raw = coordinator.data.statistics_values.get(name, {}).get("value")
-        self._attr_suggested_display_precision = _infer_precision(raw, self._scale)
+        self._attr_suggested_display_precision = _get_precision(name, raw, self._scale)
 
     @property
     def native_value(self) -> str | float | None:
@@ -716,7 +772,7 @@ class ComapAmf25ILInfoValueSensor(_ComapAmf25BaseSensor):
             f"il_info_{name.lower().replace(' ', '_')}",
         )
         self._name = name
-        self._attr_name = f"IL Info {name}"
+        self._attr_name = _build_entity_name("IL Info", name)
         self._scale = 1.0
 
         unit = coordinator.data.il_info_values.get(name, {}).get("unit", "")
@@ -730,7 +786,7 @@ class ComapAmf25ILInfoValueSensor(_ComapAmf25BaseSensor):
             self._attr_native_unit_of_measurement = unit
 
         raw = coordinator.data.il_info_values.get(name, {}).get("value")
-        self._attr_suggested_display_precision = _infer_precision(raw, self._scale)
+        self._attr_suggested_display_precision = _get_precision(name, raw, self._scale)
 
     @property
     def native_value(self) -> str | float | None:
@@ -877,7 +933,7 @@ class ComapAmf25SetpointsValueSensor(
         self._name = name
         self._attr_device_info = device_info
         label = _SETPOINTS_GROUP_LABELS.get(group_slug, group_slug.title())
-        self._attr_name = f"{label} {name}"
+        self._attr_name = _build_entity_name(label, name)
         self._attr_unique_id = (
             f"{entry.entry_id}_setpoint_{group_slug}_"
             f"{name.lower().replace(' ', '_')}"
@@ -895,7 +951,7 @@ class ComapAmf25SetpointsValueSensor(
             self._attr_native_unit_of_measurement = unit
 
         raw = coordinator.data.groups.get(group_slug, {}).get(name, {}).get("value")
-        self._attr_suggested_display_precision = _infer_precision(raw)
+        self._attr_suggested_display_precision = _get_precision(name, raw)
 
     @property
     def _entry(self) -> dict[str, str]:
