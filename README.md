@@ -62,8 +62,8 @@ Two independent polling cycles, both configurable from the integration's
 ### Setup
 
 Settings → Devices & Services → Add Integration → search
-**ComAp AMF 25**. Enter the panel's IP address and its access code
-(a numeric password, `0` by default on some configurations).
+**ComAp AMF 25**. Enter the panel's IP address and its configured
+numeric access code.
 
 ## Configuration
 
