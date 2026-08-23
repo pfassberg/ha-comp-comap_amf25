@@ -30,7 +30,6 @@ from typing import Any
 import aiohttp
 
 from .const import (
-    CMD_LOGOUT,
     GAUGE_MAP,
     MODES,
     PATH_CONTROLLER_IO_VALUES,
@@ -224,33 +223,24 @@ class ComapAmf25Client:
         return f"http://{self._host}"
 
     async def async_login(self) -> None:
-        """Log in, falling back to a forced logout if the plain attempt fails.
+        """Log in with a single, browser-like GET/POST sequence.
 
-        Most of the time GET / simply serves the login form. If it
-        doesn't - e.g. because the panel still thinks we're logged in
-        from a previous attempt - we retry once after hitting exit.htm.
-        We don't do that pre-emptively on every call: it's an extra
-        couple of requests a normal browser never sends, and some of
-        these small embedded web servers throttle or lock out clients
-        that log in/out unusually often.
+        No forced logout before or after a failed attempt. A real
+        browser never sends one, but our own code used to force one on
+        every failed nonce lookup - which, since that's exactly what
+        happens on every single one of Home Assistant's automatic
+        retries, meant every retry did a logout+relogin cycle rather
+        than a single clean login. If this panel has any kind of
+        repeated-login-attempt protection, that's a very plausible way
+        to trip and keep renewing a lockout aimed at us specifically -
+        which would explain a plain browser succeeding immediately
+        while our own retries never recover even after many attempts.
         """
-        nonce, already_authenticated = await self._async_check_login_page()
+        nonce, already_authenticated = await self._async_check_login_page(
+            raise_on_failure=True
+        )
         if already_authenticated:
             return  # _async_check_login_page already set _logged_in/_last_page.
-
-        if nonce is None:
-            # Couldn't find a nonce and it doesn't look like we're already
-            # in either - try forcing a clean logout once and re-checking.
-            try:
-                async with self._session.get(f"{self._base_url}/{CMD_LOGOUT}"):
-                    pass
-            except aiohttp.ClientError:
-                pass
-            nonce, already_authenticated = await self._async_check_login_page(
-                raise_on_failure=True
-            )
-            if already_authenticated:
-                return
 
         assert nonce is not None  # raise_on_failure=True guarantees this
         digest = hashlib.md5((nonce + self._password).encode()).hexdigest()
