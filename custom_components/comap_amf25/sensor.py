@@ -922,12 +922,16 @@ class ComapAmf25SetpointsValueSensor(
 ):
     """A single read-only configuration parameter from a Setpoints group.
 
-    Unlike the Measurement sensors, no device_class/state_class is set
-    even when the unit is recognized (e.g. kW, V) - these are static
-    configuration values, not live measurements, and HA's statistics
-    are meant for the latter. The valid range or enumerated choices
-    the panel itself reports (e.g. "(1 - 5000)" or "(OFF, MAN, AUT,
-    TEST)") is kept as an attribute for reference.
+    Gets a device_class where the unit maps to an unambiguous one (e.g.
+    kW, V, °C - matching how the Measurement sensors resolve it), since
+    that's about correctly labeling what kind of value this is, which
+    holds just as well for a static setpoint as for a live reading.
+    state_class is deliberately never set, though - that's specifically
+    about whether a value makes sense to graph over time via HA's
+    statistics, which a static configuration value doesn't. The valid
+    range or enumerated choices the panel itself reports (e.g. "(1 -
+    5000)" or "(OFF, MAN, AUT, TEST)") is kept as an attribute for
+    reference.
 
     This one class covers every Setpoints group generically (there are
     nine total) rather than a dedicated class per group like
@@ -963,6 +967,9 @@ class ComapAmf25SetpointsValueSensor(
         )
         unit = unit.replace("&deg;", "°")
         if unit in _UNIT_MAP:
+            device_class = _UNIT_MAP[unit][0]
+            if device_class:
+                self._attr_device_class = device_class
             self._attr_native_unit_of_measurement = _UNIT_MAP[unit][2]
         elif unit:
             self._attr_native_unit_of_measurement = unit
