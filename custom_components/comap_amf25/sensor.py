@@ -85,6 +85,14 @@ _PRECISION_OVERRIDES: dict[str, int] = {
     "Mains V L1-L2": 1,
     "Mains V L2-L3": 1,
     "Mains V L3-L1": 1,
+    # Shared by both the Control page's own "Run Hours" and the
+    # Statistics group's "Statistics Run Hours" - both read this same
+    # raw field name, so one entry covers both.
+    "Run Hours": 1,
+    # Statistics group counters - always whole numbers.
+    "Num Starts": 0,
+    "Num E-Stops": 0,
+    "Shutdowns": 0,
 }
 
 
@@ -130,6 +138,7 @@ _UNIT_MAP: dict[
     "min": (SensorDeviceClass.DURATION, SensorStateClass.MEASUREMENT, "min", 1.0),
     "s": (SensorDeviceClass.DURATION, SensorStateClass.MEASUREMENT, "s", 1.0),
     "Bar": (SensorDeviceClass.PRESSURE, SensorStateClass.MEASUREMENT, "bar", 1.0),
+    "°C": (SensorDeviceClass.TEMPERATURE, SensorStateClass.MEASUREMENT, "°C", 1.0),
 }
 
 
@@ -481,7 +490,14 @@ class ComapAmf25GeneratorValueSensor(_ComapAmf25BaseSensor):
         self._scale = 1.0
 
         unit = coordinator.data.generator_values.get(name, {}).get("unit", "")
-        if unit in _UNIT_MAP:
+        if name.startswith("Gen PF"):
+            # Power factor (Gen PF, Gen PF L1/L2/L3) has no unit in the
+            # panel's own HTML - device_class alone (no unit set) is
+            # exactly what HA's power_factor class expects for a plain
+            # ratio like these.
+            self._attr_device_class = SensorDeviceClass.POWER_FACTOR
+            self._attr_state_class = SensorStateClass.MEASUREMENT
+        elif unit in _UNIT_MAP:
             device_class, state_class, ha_unit, scale = _UNIT_MAP[unit]
             self._attr_device_class = device_class
             self._attr_state_class = state_class
@@ -868,6 +884,7 @@ class ComapAmf25TimeDiffSensor(
 
     _attr_has_entity_name = True
     _attr_name = "Time Diff"
+    _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = "s"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_suggested_display_precision = 0
