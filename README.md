@@ -72,5 +72,4 @@ adjust both polling intervals without re-adding the integration.
 
 ## License
 
-No license file included yet — add one appropriate for how you'd like
-to share this (e.g. MIT) before publishing publicly.
+MIT — see [LICENSE](LICENSE).
