@@ -181,11 +181,10 @@ async def async_setup_entry(
             continue
         entities.append(ComapAmf25GaugeSensor(coordinator, entry, device_info, icon))
 
-    entities.append(ComapAmf25StatusSensor(coordinator, entry, device_info))
-    # No Operation sensor here - it duplicated the IL Info group's
-    # "Breaker State", so Measurement wins per the same reasoning as
-    # the other SCADA/Measurement overlaps.
-    entities.append(ComapAmf25TimerSensor(coordinator, entry, device_info))
+    # No Status, Operation, or Timer sensors here - they duplicated the
+    # IL Info group's Engine State, Breaker State, and Timer Text/Timer
+    # Value, so Measurement wins per the same reasoning as the other
+    # SCADA/Measurement overlaps.
     entities.append(ComapAmf25AlarmCountSensor(coordinator, entry, device_info))
 
     for name in coordinator.data.engine_values:
@@ -372,45 +371,6 @@ class ComapAmf25GaugeSensor(_ComapAmf25BaseSensor):
             "high_limit": gauge.get("high"),
             "sensor_fault": gauge.get("fault", False),
         }
-
-
-class ComapAmf25StatusSensor(_ComapAmf25BaseSensor):
-    """Top-left status line, e.g. 'Ready', 'Starting', 'Running'."""
-
-    _attr_name = "Status"
-
-    def __init__(self, coordinator, entry, device_info) -> None:
-        super().__init__(coordinator, entry, device_info, "status")
-
-    @property
-    def native_value(self) -> str | None:
-        return self.coordinator.data.status
-
-
-class ComapAmf25TimerSensor(_ComapAmf25BaseSensor):
-    """Countdown timer shown next to the status line (0 when idle)."""
-
-    _attr_name = "Timer"
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = "s"
-
-    def __init__(self, coordinator, entry, device_info) -> None:
-        super().__init__(coordinator, entry, device_info, "timer")
-        self._attr_suggested_display_precision = _get_precision(
-            "Timer", coordinator.data.timer_value
-        )
-
-    @property
-    def native_value(self) -> float | None:
-        value = self.coordinator.data.timer_value
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, str | None]:
-        return {"label": self.coordinator.data.timer_label}
 
 
 class ComapAmf25AlarmCountSensor(_ComapAmf25BaseSensor):
@@ -787,12 +747,11 @@ class ComapAmf25StatisticsValueSensor(_ComapAmf25BaseSensor):
 class ComapAmf25ILInfoValueSensor(_ComapAmf25BaseSensor):
     """A single labelled value from the IL Info Measurement group page.
 
-    Breaker State duplicates the SCADA page's Operation sensor in text
-    form - Measurement wins per the same reasoning as the other SCADA/
-    Measurement overlaps, so there's no separate Operation sensor
-    anymore (see async_setup_entry). Engine State and Timer Text/Timer
-    Value are similarly close to the SCADA page's Status/Timer sensors,
-    though those two haven't been asked to move yet. FW Version /
+    Engine State, Breaker State, and Timer Text/Timer Value duplicated
+    the SCADA page's Status, Operation, and Timer sensors respectively
+    - Measurement wins per the same reasoning as the other SCADA/
+    Measurement overlaps, so none of those three exist as separate
+    SCADA-side sensors anymore (see async_setup_entry). FW Version /
     Application / FW Branch / DiagData are new, and are handy for
     noticing a firmware change. "PasswordDecode" is deliberately
     excluded by the parser - see the note in api.py.
