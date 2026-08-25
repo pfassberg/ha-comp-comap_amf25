@@ -182,7 +182,9 @@ async def async_setup_entry(
         entities.append(ComapAmf25GaugeSensor(coordinator, entry, device_info, icon))
 
     entities.append(ComapAmf25StatusSensor(coordinator, entry, device_info))
-    entities.append(ComapAmf25OperationSensor(coordinator, entry, device_info))
+    # No Operation sensor here - it duplicated the IL Info group's
+    # "Breaker State", so Measurement wins per the same reasoning as
+    # the other SCADA/Measurement overlaps.
     entities.append(ComapAmf25TimerSensor(coordinator, entry, device_info))
     entities.append(ComapAmf25AlarmCountSensor(coordinator, entry, device_info))
 
@@ -383,19 +385,6 @@ class ComapAmf25StatusSensor(_ComapAmf25BaseSensor):
     @property
     def native_value(self) -> str | None:
         return self.coordinator.data.status
-
-
-class ComapAmf25OperationSensor(_ComapAmf25BaseSensor):
-    """Operation line, e.g. 'MainsOper', 'GenOper'."""
-
-    _attr_name = "Operation"
-
-    def __init__(self, coordinator, entry, device_info) -> None:
-        super().__init__(coordinator, entry, device_info, "operation")
-
-    @property
-    def native_value(self) -> str | None:
-        return self.coordinator.data.operation
 
 
 class ComapAmf25TimerSensor(_ComapAmf25BaseSensor):
@@ -798,9 +787,12 @@ class ComapAmf25StatisticsValueSensor(_ComapAmf25BaseSensor):
 class ComapAmf25ILInfoValueSensor(_ComapAmf25BaseSensor):
     """A single labelled value from the IL Info Measurement group page.
 
-    Engine State / Breaker State / Timer Text / Timer Value duplicate
-    the Scada page's Status/Operation/Timer sensors in text form - kept
-    for the same reason as the other groups' overlap. FW Version /
+    Breaker State duplicates the SCADA page's Operation sensor in text
+    form - Measurement wins per the same reasoning as the other SCADA/
+    Measurement overlaps, so there's no separate Operation sensor
+    anymore (see async_setup_entry). Engine State and Timer Text/Timer
+    Value are similarly close to the SCADA page's Status/Timer sensors,
+    though those two haven't been asked to move yet. FW Version /
     Application / FW Branch / DiagData are new, and are handy for
     noticing a firmware change. "PasswordDecode" is deliberately
     excluded by the parser - see the note in api.py.
