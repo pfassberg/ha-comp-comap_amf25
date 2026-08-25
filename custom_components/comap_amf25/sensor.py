@@ -151,10 +151,34 @@ async def async_setup_entry(
 
     entities: list[SensorEntity] = []
 
+    # Measurement is treated as the source data; SCADA is a curated
+    # dashboard view of a subset of it, so any SCADA field that also
+    # exists on a Measurement group page defers to that copy instead
+    # of duplicating it. Every one of these is an exact name match
+    # confirmed against the real field lists - Generator (Gen kW, Gen
+    # kVA, Gen Freq, Gen V/A L1/L2/L3), Mains (Mains Freq, Mains V
+    # L1-N/L2-N/L3-N), and Statistics (Energy kWh, Run Hours).
+    _scada_value_duplicates = {
+        "Gen kW", "Gen kVA", "Gen Freq",
+        "Gen V L1-N", "Gen V L2-N", "Gen V L3-N",
+        "Gen A L1", "Gen A L2", "Gen A L3",
+        "Mains V L1-N", "Mains V L2-N", "Mains V L3-N", "Mains Freq",
+        "Energy kWh", "Run Hours",
+    }
     for name in coordinator.data.values:
+        if name in _scada_value_duplicates:
+            continue
         entities.append(ComapAmf25ValueSensor(coordinator, entry, device_info, name))
 
+    # Same reasoning for the gauges - Oil Pressure, Engine Temperature,
+    # and Battery Voltage all have a Measurement-tab source (Oil
+    # Pressure, Engine Temp, and Battery Volts on the Engine/Controller
+    # I/O groups). Fuel Level is kept - no Measurement-tab equivalent
+    # has turned up in any of the real page captures so far.
+    _scada_gauge_duplicates = {"ico_oil", "ico_temp", "ico_bat"}
     for icon in coordinator.data.gauges:
+        if icon in _scada_gauge_duplicates:
+            continue
         entities.append(ComapAmf25GaugeSensor(coordinator, entry, device_info, icon))
 
     entities.append(ComapAmf25StatusSensor(coordinator, entry, device_info))
@@ -167,33 +191,17 @@ async def async_setup_entry(
             ComapAmf25EngineValueSensor(coordinator, entry, device_info, name)
         )
 
-    # Exact duplicates of Control page sensors with identical names
-    # (present since the original version of this integration) -
-    # confirmed against the actual field lists: Gen kW, Gen kVA, Gen
-    # Freq, and the Gen V/A L1/L2/L3 values are all on the Scada page
-    # under the exact same names. Energy kWh and Run Hours also overlap
-    # with the Statistics group, but are kept there deliberately.
-    _generator_duplicates = {
-        "Gen kW", "Gen kVA", "Gen Freq",
-        "Gen V L1-N", "Gen V L2-N", "Gen V L3-N",
-        "Gen A L1", "Gen A L2", "Gen A L3",
-    }
+    # Measurement is the source data; SCADA is a curated dashboard view
+    # of a subset of it (see the SCADA/Control page loop above, which
+    # excludes exactly these fields instead) - so every field here is
+    # created, with SCADA deferring to these rather than the other way
+    # around.
     for name in coordinator.data.generator_values:
-        if name in _generator_duplicates:
-            continue
         entities.append(
             ComapAmf25GeneratorValueSensor(coordinator, entry, device_info, name)
         )
 
-    # Exact duplicates of Control page sensors with identical names
-    # (present since the original version of this integration) - after
-    # the "Mains Mains" naming fix, both copies would display under the
-    # identical name, which is confusing rather than useful. Kept the
-    # Control page's originals rather than these newer copies.
-    _mains_duplicates = {"Mains Freq", "Mains V L1-N", "Mains V L2-N", "Mains V L3-N"}
     for name in coordinator.data.mains_values:
-        if name in _mains_duplicates:
-            continue
         entities.append(
             ComapAmf25MainsValueSensor(coordinator, entry, device_info, name)
         )
@@ -257,7 +265,12 @@ class _ComapAmf25BaseSensor(CoordinatorEntity[ComapAmf25Coordinator], SensorEnti
 
 
 class ComapAmf25ValueSensor(_ComapAmf25BaseSensor):
-    """A single labelled value from the Scada page (e.g. 'Gen kW')."""
+    """A single labelled value from the SCADA page (e.g. 'Gen kW').
+
+    Only fields with no Measurement-tab equivalent get an entity here
+    - see _scada_value_duplicates in async_setup_entry for the ones
+    that are deliberately skipped in favor of their Measurement copy.
+    """
 
     def __init__(
         self,
@@ -300,7 +313,14 @@ class ComapAmf25ValueSensor(_ComapAmf25BaseSensor):
 
 
 class ComapAmf25GaugeSensor(_ComapAmf25BaseSensor):
-    """A gauge value (oil pressure, temperature, fuel level, battery voltage)."""
+    """A gauge value from the SCADA page (oil pressure, temperature,
+    fuel level, battery voltage).
+
+    Only Fuel Level actually gets an entity here - the other three
+    have a Measurement-tab source and are deliberately skipped in
+    favor of that copy, same reasoning as ComapAmf25ValueSensor. See
+    _scada_gauge_duplicates in async_setup_entry.
+    """
 
     def __init__(
         self,
@@ -478,13 +498,11 @@ class ComapAmf25EngineValueSensor(_ComapAmf25BaseSensor):
 class ComapAmf25GeneratorValueSensor(_ComapAmf25BaseSensor):
     """A single labelled value from the Generator Measurement group page.
 
-    Gen kW, Gen kVA, Gen Freq, Gen V L1-N/L2-N/L3-N, and Gen A L1/L2/L3
-    are skipped entirely (see the setup loop in async_setup_entry) -
-    exact name collisions with the Control page's own sensors of the
-    same name, kept there rather than here to preserve any existing
-    history. Everything else here (per-phase kW/kVAr/kVA/PF, load
-    character, and the line-to-line voltages) isn't available anywhere
-    else in this integration.
+    Every field here becomes an entity, including Gen kW, Gen kVA,
+    Gen Freq, and the Gen V/A L1/L2/L3 values that also appear on the
+    SCADA page - Measurement is treated as the source, and the SCADA
+    page's own copies of these same fields are excluded instead (see
+    the setup loop in async_setup_entry).
     """
 
     def __init__(
@@ -543,12 +561,11 @@ class ComapAmf25GeneratorValueSensor(_ComapAmf25BaseSensor):
 class ComapAmf25MainsValueSensor(_ComapAmf25BaseSensor):
     """A single labelled value from the Mains Measurement group page.
 
-    Only the line-to-line voltages (L1-L2, L2-L3, L3-L1) end up as
-    entities here - they aren't available anywhere else. Mains Freq
-    and the L*-N voltages are skipped entirely (see the setup loop in
-    async_setup_entry) since they're exact name collisions with the
-    Control page's own sensors of the same name, not just a semantic
-    overlap like the other groups have.
+    Every field here becomes an entity, including Mains Freq and the
+    L*-N voltages that also appear on the SCADA page - Measurement is
+    treated as the source, and the SCADA page's own copies of these
+    same fields are excluded instead (see the setup loop in
+    async_setup_entry).
     """
 
     def __init__(
