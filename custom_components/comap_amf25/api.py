@@ -30,6 +30,7 @@ from typing import Any
 import aiohttp
 
 from .const import (
+    CMD_LOGOUT,
     GAUGE_MAP,
     MODES,
     PATH_CONTROLLER_IO_VALUES,
@@ -467,6 +468,28 @@ class ComapAmf25Client:
                 await self.async_login()
                 async with self._session.get(f"{self._base_url}/{path}") as resp:
                     resp.raise_for_status()
+
+    async def async_logout(self) -> None:
+        """Best-effort logout, so the panel doesn't hold onto our slot
+        across a Home Assistant restart.
+
+        Confirmed by packet capture: the panel enforces a small limit
+        on concurrent logged-in clients, and returns "Too many other
+        clients connected" instead of the login page when it's full -
+        which is exactly what happens on the next login attempt if the
+        previous session was never explicitly ended, since Home
+        Assistant restarting closes the TCP connection but never tells
+        the panel we're actually done. Errors are swallowed: this runs
+        during shutdown, when there's nothing useful to do with a
+        failure, and it shouldn't hold up or interrupt shutdown.
+        """
+        try:
+            async with self._lock:
+                async with self._session.get(f"{self._base_url}/{CMD_LOGOUT}"):
+                    pass
+        except aiohttp.ClientError:
+            pass
+        self._logged_in = False
 
     @staticmethod
     def _parse(html: str) -> ComapAmf25Data:

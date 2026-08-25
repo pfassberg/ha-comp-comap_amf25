@@ -5,6 +5,7 @@ import asyncio
 import logging
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CoreState, HomeAssistant
 
 from .const import DOMAIN
@@ -77,11 +78,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
     # We own this session directly now (not HA's shared one - see the
     # comment in coordinator.py for why), so we're responsible for
     # closing it, unlike a session from async_create_clientsession
-    # which handles that automatically.
+    # which handles that automatically. Registered *before* the logout
+    # hooks below: entry.async_on_unload runs its callbacks in reverse
+    # (LIFO) order, so registering this first means it actually runs
+    # *last* - after logout has had a chance to use the still-open
+    # session, not after it's already been closed out from under it.
     entry.async_on_unload(coordinator.session.close)
+
+    async def _async_logout(*_args: object) -> None:
+        # Packet capture confirmed the panel enforces a small limit on
+        # concurrent logged-in clients, and returns "Too many other
+        # clients connected" instead of the login page once that limit
+        # is hit - which is exactly what happens on the next login
+        # attempt if the previous session was never explicitly ended.
+        # A Home Assistant restart closes the TCP connection but never
+        # tells the panel we're actually done, so without this the
+        # panel holds our slot until its own internal timeout clears
+        # it - which is what's behind the "takes a few retries to come
+        # up" pattern this integration has had since the beginning.
+        await coordinator.client.async_logout()
+
+    # A plain restart never calls async_unload_entry at all (config
+    # entries stay "loaded" across a restart - that's why they resume
+    # automatically without reconfiguring) - it only fires
+    # EVENT_HOMEASSISTANT_STOP, so that's the hook that actually
+    # matters for logging out before a restart specifically.
+    entry.async_on_unload(
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _async_logout)
+    )
+    # Also log out on a plain entry unload/reload (e.g. changing the
+    # poll interval, or removing the integration) - a separate, rarer
+    # case from a full Home Assistant restart, but worth the same
+    # courtesy to the panel.
+    entry.async_on_unload(_async_logout)
     return True
 
 
