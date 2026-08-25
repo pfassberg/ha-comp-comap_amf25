@@ -167,7 +167,20 @@ async def async_setup_entry(
             ComapAmf25EngineValueSensor(coordinator, entry, device_info, name)
         )
 
+    # Exact duplicates of Control page sensors with identical names
+    # (present since the original version of this integration) -
+    # confirmed against the actual field lists: Gen kW, Gen kVA, Gen
+    # Freq, and the Gen V/A L1/L2/L3 values are all on the Scada page
+    # under the exact same names. Energy kWh and Run Hours also overlap
+    # with the Statistics group, but are kept there deliberately.
+    _generator_duplicates = {
+        "Gen kW", "Gen kVA", "Gen Freq",
+        "Gen V L1-N", "Gen V L2-N", "Gen V L3-N",
+        "Gen A L1", "Gen A L2", "Gen A L3",
+    }
     for name in coordinator.data.generator_values:
+        if name in _generator_duplicates:
+            continue
         entities.append(
             ComapAmf25GeneratorValueSensor(coordinator, entry, device_info, name)
         )
@@ -465,11 +478,13 @@ class ComapAmf25EngineValueSensor(_ComapAmf25BaseSensor):
 class ComapAmf25GeneratorValueSensor(_ComapAmf25BaseSensor):
     """A single labelled value from the Generator Measurement group page.
 
-    Some of these (Gen kW, Gen kVA, Gen Freq, Gen V L1-N/L2-N/L3-N, Gen A
-    L1/L2/L3) overlap with what's already on the Scada page - both are
-    exposed for the same reason as the Engine group's overlap. The rest
-    (per-phase kW/kVAr/kVA/PF, load character, and line-to-line voltages)
-    aren't available anywhere else in this integration.
+    Gen kW, Gen kVA, Gen Freq, Gen V L1-N/L2-N/L3-N, and Gen A L1/L2/L3
+    are skipped entirely (see the setup loop in async_setup_entry) -
+    exact name collisions with the Control page's own sensors of the
+    same name, kept there rather than here to preserve any existing
+    history. Everything else here (per-phase kW/kVAr/kVA/PF, load
+    character, and the line-to-line voltages) isn't available anywhere
+    else in this integration.
     """
 
     def __init__(
