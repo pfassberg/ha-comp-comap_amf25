@@ -61,6 +61,16 @@ _LOGIN_MARKER = 'id="psw_id"'
 # page rather than the login form (used to detect an already-logged-in
 # session so we don't mistake it for a parse failure).
 _AUTHENTICATED_MARKERS = ('class="vsn"', 'class="mlv"', 'class="tsch"')
+# The panel's own generic error page (red background, titled "IB-Lite
+# error") - confirmed by packet capture to be shown for things like a
+# concurrent-client limit ("Too many other clients connected. Try your
+# request later.") instead of the login page. The actual message is in
+# a `class="e"` div; extracting just that text turns a 600-character
+# raw HTML dump into a one-line, directly actionable error message in
+# both the HA log and the "why is this entry not ready" GUI text.
+_IB_LITE_ERROR_RE = re.compile(
+    r'<title>IB-Lite error</title>.*?class="e">([^<]*)</div>', re.S
+)
 
 _VAL_RE = re.compile(
     r'class="vsn">([^<]+)</td>.*?class="vsok">([^<]*)</td>'
@@ -291,6 +301,15 @@ class ComapAmf25Client:
             return None, True
 
         if raise_on_failure:
+            error_match = _IB_LITE_ERROR_RE.search(text)
+            if error_match:
+                # The panel's own error text, e.g. "Too many other
+                # clients connected. Try your request later." - shows
+                # up cleanly in both the HA log and the "not ready"
+                # reason text in the GUI, instead of a raw HTML dump.
+                raise ComapAmf25ConnectionError(
+                    f"Panel returned an error: {error_match.group(1).strip()}"
+                )
             snippet = " ".join(text.split())[:600]
             raise ComapAmf25ConnectionError(
                 "Could not find login nonce - unexpected page content. "
