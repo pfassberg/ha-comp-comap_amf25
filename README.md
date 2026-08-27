@@ -1,5 +1,7 @@
 # ComAp AMF 25 Genset Controller for Home Assistant
 
+[![Validate](https://github.com/pfassberg/ha-comp-comap_amf25/actions/workflows/validate.yml/badge.svg)](https://github.com/pfassberg/ha-comp-comap_amf25/actions/workflows/validate.yml)
+
 A custom Home Assistant integration for the ComAp AMF 25 genset (SCADA)
 controller's built-in web GUI (the "IB-Lite" panel). It logs in, polls
 the panel's own status pages, and exposes everything as Home Assistant
